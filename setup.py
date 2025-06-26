@@ -11,6 +11,7 @@ setup(
     packages=['omq'],
     install_requires=[
         'SQLAlchemy==2.0.41',
+        'PyMySQL==1.1.1',
     ],
     classifiers=[
         'Development Status :: 3 - Alpha',
