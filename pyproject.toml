@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "OMQ"
+version = "1.0.0"
+dependencies = [
+  "SQLAlchemy == 2.0.41",
+]
+requires-python = ">=3.11"
+authors = [
+  {name = "De Ontzorgers", email = "service@deontzorgers.nl"}
+]
+maintainers = [
+  {name = "De Ontzorgers", email = "service@deontzorgers.nl"}
+]
+description = "Message broker design for De ontzorgers (https://www.deontzorgers.nl)"
+readme = "README.rst"
+license = "MIT"
+license-files = ["LICEN[CS]E.*"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python"
+]
