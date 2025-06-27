@@ -1,8 +1,21 @@
+import logging
 import json
 import os
+import typing
 
-from omq.exceptions import ImproperlyConfigured, InvalidJson, NoExactMatch, TooManyRows
+from enum import Enum
+from omq.exceptions import ImproperlyConfigured, InvalidArgument, InvalidJson, NoExactMatch, TooManyRows
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine.row import Row
+
+logger = logging.getLogger(__name__)
+
+class ProcesStatus(Enum):
+	QUEUED = 'queued'
+	FAILED = 'failed'
+	PROGRESS = 'in progres'
+	COMPLETED = 'completed'
 
 
 class Singleton(type):
@@ -52,9 +65,8 @@ class OMQ(metaclass=Singleton):
 					`id` INT(11) NOT NULL AUTO_INCREMENT,
 					`destination` VARCHAR(50) NOT NULL COLLATE 'utf8mb4_unicode_ci',
 					`priority` SMALLINT(5) UNSIGNED NOT NULL DEFAULT '1',
-					`status` ENUM('queued','failed','done') NOT NULL DEFAULT 'queued' COLLATE 'utf8mb4_unicode_ci',
+					`status` ENUM('queued','in progres','failed','completed') NOT NULL DEFAULT 'queued' COLLATE 'utf8mb4_unicode_ci',
 					`creation` DATETIME NOT NULL,
-					`run_after` DATETIME NULL,
 					`customer` INT(11) NULL DEFAULT NULL,
 					`message` LONGTEXT NOT NULL COLLATE 'utf8mb4_bin',
 					PRIMARY KEY (`id`) USING BTREE,
@@ -76,56 +88,170 @@ class OMQ(metaclass=Singleton):
 			return False
 		return True
 
-	def get_message(self, app_name: str) -> tuple[id, dict]:
-		pass
+	def _row_to_dict(self, row: Row) -> dict:
+		id_, priority, status, creation, customer, message = row
+		return {
+			'id': id_,
+			'priority': priority,
+			'status': status,
+			'creation': creation,
+			'customer': customer,
+			'message': json.loads(message),
+		}
 
-	def get_messages(self, app_name: str) -> tuple[tuple[id, dict]]:
-		pass
+	def get_messages(
+		self,
+		app_name: str,
+		message_id=-1,
+		status=None,
+		max_results=20,
+		customer_id=None
+	) -> typing.Union[
+		tuple[tuple[id, dict]],
+		tuple[tuple[None, None]],
+	]:
+		if max_results < 1:
+			return ((None, None),)
+
+		sql_parameters = {'app_name': app_name}
+		filters = ''
+		if message_id > 0:
+			sql_parameters.update({'message_id': message_id})
+			filters += 'and `id` = :message_id'
+
+		if status:
+			status_ = status
+			if isinstance(status, ProcesStatus):
+				status_ = status.value
+
+			sql_parameters.update({'status': status_})
+			filters += 'and `status` = :status'
+
+		if customer_id:
+			sql_parameters.update({'customer_id': customer_id})
+			filters += 'and customer = :customer_id'
+
+		sql = f"""
+			select
+				`id`,
+				`priority`,
+				`status`,
+				`creation`,
+				`customer`,
+				`message`
+			 from
+			 	`messages`
+			where
+				`destination` = :app_name
+				{filters}
+			order by
+				priority desc, creation desc
+			limit {min(int(max_results), 50)}
+		"""
+		with self.engine.connect() as connection:
+			resultset = connection.execute(text(sql), sql_parameters)
+			if resultset.rowcount == 0:
+				return ((None, None),)
+
+			if max_results == 1 or resultset.rowcount == 1:
+				row = resultset.first()
+				return ((row[0], self._row_to_dict(row)),)
+
+			return *(
+				(row[0], self._row_to_dict(row))
+				for row in resultset.all()
+			),
+
+	def get_message(
+			self,
+			app_name: str,
+			message_id=-1,
+			status=None,
+			customer_id=None
+	) -> typing.Union[
+		tuple[id, dict],
+		tuple[None, None],
+	]:
+		return self.get_messages(
+			app_name,
+			message_id,
+			status=status,
+			max_results=1,
+			customer_id=customer_id,
+		)[0]
 
 	def send_message(
 			self,
 			app_name: str,
 			message: str,
 			priority=1,
-			run_after=None,
 			customer=None
 	) -> bool:
 		if not self._is_valid_json(message):
 			raise InvalidJson(message)
 
 		sql = """
-			insert into `messages`(`destination`, `priority`, `status`, `creation`, `run_after`, `customer`, `message`)
-			values(:app_name, :priority, 'queued', now(), :run_after, :customer, :message)
+			insert into `messages`(`destination`, `priority`, `status`, `creation`, `customer`, `message`)
+			values(:app_name, :priority, 'queued', now(), :customer, :message)
+		"""
+		with self.engine.connect() as connection:
+			try:
+				connection.begin()
+				connection.execute(text(sql), {
+					'app_name': app_name,
+					'message':message,
+					'priority': priority,
+					'customer': customer,
+				})
+				connection.commit()
+			except IntegrityError as ie:
+				logger.error(ie._sql_message())
+				return False
+
+			return True
+
+	def _set_status(self, app_name: str, message_id: int, status: ProcesStatus):
+		if not isinstance(status, ProcesStatus):
+			raise InvalidArgument('Invalid argument provided, should be one of the ProcesStatus enumerations.')
+
+		sql = """
+			update `messages` set `status` = :status
+			where
+				`destination` = :app_name
+				and `id` = :message_id
 		"""
 		with self.engine.connect() as connection:
 			connection.begin()
-			connection.execute(text(sql), {
+			result = connection.execute(text(sql), {
+				'status': status.value,
 				'app_name': app_name,
-				'message':message,
-				'priority': priority,
-				'run_after': run_after,
-				'customer': customer,
+				'message_id': int(message_id),
 			})
 			connection.commit()
-			return True
+			if result.rowcount == 1:
+				return True
 
-	def starting_proces(self, message_id: int) -> bool:
-		pass
+		logger.error(NoExactMatch(f'Could not update message. Message with ID \'{message_id}\' not found for \'{app_name}\''))
+		return False
 
-	def failed_proces(self, message_id: int) -> bool:
-		pass
+	def requeue_proces(self, app_name: str, message_id: int) -> bool:
+		return self._set_status(app_name, message_id, ProcesStatus.QUEUED)
 
-	def done_proces(self, message_id: int) -> bool:
-		pass
+	def starting_proces(self, app_name: str, message_id: int) -> bool:
+		return self._set_status(app_name, message_id, ProcesStatus.PROGRESS)
 
-	# def _get_apps(self) -> tuple[tuple[name: str, port: int]]:
+	def failed_proces(self, app_name: str, message_id: int) -> bool:
+		return self._set_status(app_name, message_id, ProcesStatus.FAILED)
+
+	def completed_proces(self, app_name: str, message_id: int) -> bool:
+		return self._set_status(app_name, message_id, ProcesStatus.COMPLETED)
+
 	def get_apps(self) -> tuple[dict]:
 		sql = "select name, port from `workers`"
 		with self.engine.connect() as connection:
 			resultset = connection.execute(text(sql))
 			return tuple(resultset.mappings().all())
 
-	# def _get_app(self, app_name: str) -> tuple[name: str, port: int]:
 	def get_app(self, app_name: str) -> tuple[str, int]:
 		sql = "select name, port from `workers` where name = :app_name"
 		with self.engine.connect() as connection:

@@ -9,3 +9,6 @@ class TooManyRows(Exception):
 
 class NoExactMatch(Exception):
 	pass
+
+class InvalidArgument(Exception):
+	pass
