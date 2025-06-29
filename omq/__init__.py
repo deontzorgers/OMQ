@@ -1,6 +1,7 @@
 import logging
 import json
 import os
+import socket
 import typing
 
 from enum import Enum
@@ -87,6 +88,11 @@ class OMQ(metaclass=Singleton):
 		except ValueError as e:
 			return False
 		return True
+
+	def _notify(self, host: str, port: int, message: str):
+		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+		server_address = (host, int(port))
+		sent = sock.sendto(message.encode(), server_address)
 
 	def _row_to_dict(self, row: Row) -> dict:
 		id_, priority, status, creation, customer, message = row
@@ -190,6 +196,8 @@ class OMQ(metaclass=Singleton):
 		if not self._is_valid_json(message):
 			raise InvalidJson(message)
 
+		host, port = self.get_app(app_name)
+
 		sql = """
 			insert into `messages`(`destination`, `priority`, `status`, `creation`, `customer`, `message`)
 			values(:app_name, :priority, 'queued', now(), :customer, :message)
@@ -204,6 +212,7 @@ class OMQ(metaclass=Singleton):
 					'customer': customer,
 				})
 				connection.commit()
+				self._notify(host, port, message)
 			except IntegrityError as ie:
 				logger.error(ie._sql_message())
 				return False
