@@ -258,7 +258,24 @@ class OMQ(metaclass=Singleton):
 		return self._set_status(app_name, message_id, ProcesStatus.FAILED)
 
 	def completed_proces(self, app_name: str, message_id: int) -> bool:
-		return self._set_status(app_name, message_id, ProcesStatus.COMPLETED)
+		sql = """
+			delete from `messages`
+			where
+				`destination` = :app_name
+				and `id` = :message_id
+		"""
+		with self.engine.connect() as connection:
+			connection.begin()
+			result = connection.execute(text(sql), {
+				'app_name': app_name,
+				'message_id': int(message_id),
+			})
+			connection.commit()
+			if result.rowcount == 1:
+				return True
+
+		logger.error(NoExactMatch(f'Could not delete message. Message with ID \'{message_id}\' not found for \'{app_name}\''))
+		return False
 
 	def get_apps(self) -> tuple[dict]:
 		sql = "select name, port from `workers`"
@@ -280,9 +297,23 @@ class OMQ(metaclass=Singleton):
 			return hostname, port
 
 	def register_worker(self, app_name: str, hostname: str, notify_port: int) -> bool:
-		sql = "insert into `workers` (`name`, `hostname`, `port`) values(:app_name, :hostname, :notify_port)"
+		try:
+			sql = "insert into `workers` (`name`, `hostname`, `port`) values(:app_name, :hostname, :notify_port)"
+			with self.engine.connect() as connection:
+				connection.begin()
+				connection.execute(text(sql), {'app_name': app_name, 'hostname': hostname, 'notify_port': notify_port})
+				connection.commit()
+			return True
+		except IntegrityError as ie:
+			logger.error(ie._sql_message())
+		return False
+
+	def unregister_worker(self, app_name: str, hostname: str, notify_port: int) -> bool:
+		sql = "delete from `workers` where `name` = :app_name and `hostname` = :hostname and `port` = :notify_port"
 		with self.engine.connect() as connection:
 			connection.begin()
+			connection.execute(text(f"SET FOREIGN_KEY_CHECKS = 0"))
 			connection.execute(text(sql), {'app_name': app_name, 'hostname': hostname, 'notify_port': notify_port})
+			connection.execute(text(f"SET FOREIGN_KEY_CHECKS = 1"))
 			connection.commit()
 		return True

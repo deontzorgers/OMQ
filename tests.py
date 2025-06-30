@@ -3,6 +3,8 @@ import os
 import unittest
 
 from dotenv import load_dotenv
+from sqlalchemy.exc import IntegrityError
+
 from omq import InvalidJson, NoAppFound, NoExactMatch, OMQ, ProcesStatus
 from sqlalchemy import create_engine, text
 
@@ -47,6 +49,7 @@ class TestOMW(unittest.TestCase):
 
 	def test_01_register_app(self):
 		self.assertTrue(self.omq.register_worker('mcepd_runner', 'localhost', 5555))
+		self.assertFalse(self.omq.register_worker('mcepd_runner', 'localhost', 5555))
 		self.assertTrue(self.omq.register_worker('cw_runner', 'localhost',5556))
 
 	def test_02_get_apps(self):
@@ -144,6 +147,7 @@ class TestOMW(unittest.TestCase):
 	def test_06_change_status(self):
 		app_name = 'mcepd_runner'
 		succesfull_task_id = 2
+		failed_task_id = 3
 		missing_task_id = 1
 
 		self.assertFalse(self.omq.starting_proces(app_name, missing_task_id))
@@ -151,22 +155,25 @@ class TestOMW(unittest.TestCase):
 		self.assertFalse(self.omq.completed_proces(app_name, missing_task_id))
 		self.assertFalse(self.omq.requeue_proces(app_name, missing_task_id))
 
-
 		self.assertTrue(self.omq.starting_proces(app_name, succesfull_task_id))
 		id_, msg = self.omq.get_message(app_name, message_id=succesfull_task_id)
 		self.assertEqual(msg.get('status'), ProcesStatus.PROGRESS.value)
 
-		self.assertTrue(self.omq.failed_proces(app_name, succesfull_task_id))
-		id_, msg = self.omq.get_message(app_name, message_id=succesfull_task_id)
+		self.assertTrue(self.omq.failed_proces(app_name, failed_task_id))
+		id_, msg = self.omq.get_message(app_name, message_id=failed_task_id)
 		self.assertEqual(msg.get('status'), ProcesStatus.FAILED.value)
 
 		self.assertTrue(self.omq.completed_proces(app_name, succesfull_task_id))
 		id_, msg = self.omq.get_message(app_name, message_id=succesfull_task_id)
-		self.assertEqual(msg.get('status'), ProcesStatus.COMPLETED.value)
+		self.assertIsNone(id_)
+		self.assertIsNone(msg)
 
-		self.assertTrue(self.omq.requeue_proces(app_name, succesfull_task_id))
-		id_, msg = self.omq.get_message(app_name, message_id=succesfull_task_id)
+		self.assertTrue(self.omq.requeue_proces(app_name, failed_task_id))
+		id_, msg = self.omq.get_message(app_name, message_id=failed_task_id)
 		self.assertEqual(msg.get('status'), ProcesStatus.QUEUED.value)
+
+	def test_07_unregister_app(self):
+		self.assertTrue(self.omq.unregister_worker('mcepd_runner', 'localhost', 5555))
 
 
 if __name__ == '__main__':
