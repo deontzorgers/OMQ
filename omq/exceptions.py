@@ -12,3 +12,6 @@ class NoExactMatch(Exception):
 
 class InvalidArgument(Exception):
 	pass
+
+class NoAppFound(Exception):
+	pass

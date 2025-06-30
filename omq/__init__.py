@@ -5,7 +5,7 @@ import socket
 import typing
 
 from enum import Enum
-from omq.exceptions import ImproperlyConfigured, InvalidArgument, InvalidJson, NoExactMatch, TooManyRows
+from omq.exceptions import ImproperlyConfigured, InvalidArgument, InvalidJson, NoAppFound, NoExactMatch, TooManyRows
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine.row import Row
@@ -55,8 +55,9 @@ class OMQ(metaclass=Singleton):
 				"""
 				CREATE TABLE if not exists `workers` (
 					`name` VARCHAR(50) NOT NULL,
+					`hostname` VARCHAR(150) NOT NULL,
 					`port` INT NOT NULL,
-					UNIQUE INDEX `port` (`port`),
+					UNIQUE INDEX `port` (`port`, `hostname`),
 					PRIMARY KEY (`name`)
 				)
 				COLLATE='utf8mb4_unicode_ci'
@@ -90,9 +91,9 @@ class OMQ(metaclass=Singleton):
 		return True
 
 	def _notify(self, host: str, port: int, message: str):
-		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-		server_address = (host, int(port))
-		sent = sock.sendto(message.encode(), server_address)
+		with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+			server_address = (host, int(port))
+			sock.sendto(message.encode(), server_address)
 
 	def _row_to_dict(self, row: Row) -> dict:
 		id_, priority, status, creation, customer, message = row
@@ -196,7 +197,11 @@ class OMQ(metaclass=Singleton):
 		if not self._is_valid_json(message):
 			raise InvalidJson(message)
 
-		host, port = self.get_app(app_name)
+		try:
+			host, port = self.get_app(app_name)
+		except NoAppFound as naf:
+			logger.error(naf)
+			return False
 
 		sql = """
 			insert into `messages`(`destination`, `priority`, `status`, `creation`, `customer`, `message`)
@@ -262,17 +267,22 @@ class OMQ(metaclass=Singleton):
 			return tuple(resultset.mappings().all())
 
 	def get_app(self, app_name: str) -> tuple[str, int]:
-		sql = "select name, port from `workers` where name = :app_name"
+		sql = "select hostname, port from `workers` where name = :app_name"
 		with self.engine.connect() as connection:
 			resultset = connection.execute(text(sql), {'app_name': app_name})
-			if resultset.rowcount != 1:
-				raise NoExactMatch(f'Expected to find one row, however there are {resultset.rowcount} rows found.')
-			return tuple(resultset.first())
 
-	def register_worker(self, app_name: str, notify_port: int) -> bool:
-		sql = "insert into `workers`(`name`, `port`) values(:app_name, :notify_port)"
+			if resultset.rowcount == 0:
+				raise NoAppFound(f'The worker {app_name} does not exists or did not register.')
+			elif resultset.rowcount > 1:
+				raise NoExactMatch(f'Expected to find one row, however there are {resultset.rowcount} rows found.')
+
+			hostname, port = resultset.first()
+			return hostname, port
+
+	def register_worker(self, app_name: str, hostname: str, notify_port: int) -> bool:
+		sql = "insert into `workers` (`name`, `hostname`, `port`) values(:app_name, :hostname, :notify_port)"
 		with self.engine.connect() as connection:
 			connection.begin()
-			connection.execute(text(sql), {'app_name': app_name, 'notify_port': notify_port})
+			connection.execute(text(sql), {'app_name': app_name, 'hostname': hostname, 'notify_port': notify_port})
 			connection.commit()
 		return True

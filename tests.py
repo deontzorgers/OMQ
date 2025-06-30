@@ -3,7 +3,7 @@ import os
 import unittest
 
 from dotenv import load_dotenv
-from omq import InvalidJson, NoExactMatch, OMQ, ProcesStatus
+from omq import InvalidJson, NoAppFound, NoExactMatch, OMQ, ProcesStatus
 from sqlalchemy import create_engine, text
 
 
@@ -28,12 +28,12 @@ class TestOMW(unittest.TestCase):
 	def tearDownClass(cls):
 		connection = create_engine(cls._engine_url).connect()
 		connection.begin()
-		connection.execute(text(f"use `{cls.db}`"))
-		connection.execute(text(f"SET FOREIGN_KEY_CHECKS = 0"))
-		connection.execute(text(f"Truncate table `workers`"))
-		connection.execute(text(f"Truncate table `messages`"))
-		connection.execute(text(f"SET FOREIGN_KEY_CHECKS = 1"))
-		# connection.execute(text(f"DROP DATABASE IF EXISTS `{cls.db}`"))
+		# connection.execute(text(f"use `{cls.db}`"))
+		# connection.execute(text(f"SET FOREIGN_KEY_CHECKS = 0"))
+		# connection.execute(text(f"Truncate table `workers`"))
+		# connection.execute(text(f"Truncate table `messages`"))
+		# connection.execute(text(f"SET FOREIGN_KEY_CHECKS = 1"))
+		connection.execute(text(f"DROP DATABASE IF EXISTS `{cls.db}`"))
 		connection.commit()
 
 	def test_00_test_json_validation(self):
@@ -46,16 +46,16 @@ class TestOMW(unittest.TestCase):
 		self.assertTrue(self.omq._is_valid_json('{"foo":[5,6.8],"foo":"bar"}'))  # prints True
 
 	def test_01_register_app(self):
-		self.assertTrue(self.omq.register_worker('mcepd_runner', 5555))
-		self.assertTrue(self.omq.register_worker('cw_runner', 5556))
+		self.assertTrue(self.omq.register_worker('mcepd_runner', 'localhost', 5555))
+		self.assertTrue(self.omq.register_worker('cw_runner', 'localhost',5556))
 
 	def test_02_get_apps(self):
 		self.assertEqual(self.omq.get_apps(), ({'name': 'mcepd_runner', 'port': 5555},{'name': 'cw_runner', 'port': 5556}))
 
 	def test_03_get_app(self):
-		self.assertEqual(self.omq.get_app('mcepd_runner'), ('mcepd_runner', 5555))
-		self.assertEqual(self.omq.get_app('cw_runner'), ('cw_runner', 5556))
-		with self.assertRaises(NoExactMatch):
+		self.assertEqual(self.omq.get_app('mcepd_runner'), ('localhost', 5555))
+		self.assertEqual(self.omq.get_app('cw_runner'), ('localhost', 5556))
+		with self.assertRaises(NoAppFound):
 			self.omq.get_app('tf_runner')
 
 	def test_04_send_message(self):
