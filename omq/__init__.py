@@ -152,7 +152,7 @@ class OMQ(metaclass=Singleton):
 				`destination` = :app_name
 				{filters}
 			order by
-				priority desc, creation desc
+				priority desc, creation asc
 			limit {min(int(max_results), 50)}
 		"""
 		with self.engine.connect() as connection:
