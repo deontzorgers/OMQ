@@ -239,7 +239,7 @@ class OMQ(metaclass=Singleton):
 					'app_name': app_name,
 					'message':message,
 					'queued':ProcesStatus.QUEUED.value,
-					'priority': priority,
+					'priority': priority or 1,
 					'customer': customer,
 				})
 				inserted_id = connection.execute(text(get_id_sql)).scalar_one()
