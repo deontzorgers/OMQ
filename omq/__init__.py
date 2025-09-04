@@ -222,6 +222,8 @@ class OMQ(metaclass=Singleton):
 			insert into `messages`(`destination`, `priority`, `status`, `creation`, `customer`, `message`)
 			values(:app_name, :priority, :queued, now(), :customer, :message)
 		"""
+		get_id_sql = "SELECT LAST_INSERT_ID()"
+
 		with self.engine.connect() as connection:
 			try:
 				connection.begin()
@@ -240,13 +242,14 @@ class OMQ(metaclass=Singleton):
 					'priority': priority,
 					'customer': customer,
 				})
+				inserted_id = connection.execute(text(get_id_sql)).scalar_one()
 				connection.commit()
 				self._notify(host, port, message)
 			except IntegrityError as ie:
 				logger.error(ie._sql_message())
 				return False
 
-			return True
+			return inserted_id
 
 	def _set_status(self, app_name: str, message_id: int, status: ProcesStatus, error_msg=None):
 		if not isinstance(status, ProcesStatus):
