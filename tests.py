@@ -3,9 +3,8 @@ import os
 import unittest
 
 from dotenv import load_dotenv
-from sqlalchemy.exc import IntegrityError
 
-from omq import InvalidJson, NoAppFound, NoExactMatch, OMQ, ProcesStatus
+from omq import InvalidJson, NoAppFound, OMQ, ProcesStatus
 from sqlalchemy import create_engine, text
 
 
@@ -63,6 +62,13 @@ class TestOMW(unittest.TestCase):
 
 	def test_04_send_message(self):
 		self.assertTrue(
+			self.omq.send_message(
+				'cw_runner',
+				json.dumps({'package': 'my custom message'}),
+			)
+		)
+
+		self.assertFalse(
 			self.omq.send_message(
 				'cw_runner',
 				json.dumps({'package': 'my custom message'}),
@@ -159,9 +165,10 @@ class TestOMW(unittest.TestCase):
 		id_, msg = self.omq.get_message(app_name, message_id=succesfull_task_id)
 		self.assertEqual(msg.get('status'), ProcesStatus.PROGRESS.value)
 
-		self.assertTrue(self.omq.failed_proces(app_name, failed_task_id))
+		self.assertTrue(self.omq.failed_proces(app_name, failed_task_id, error_log='Er was een probleem met de export'))
 		id_, msg = self.omq.get_message(app_name, message_id=failed_task_id)
 		self.assertEqual(msg.get('status'), ProcesStatus.FAILED.value)
+		self.assertEqual(msg.get('error_log'), 'Er was een probleem met de export')
 
 		self.assertTrue(self.omq.completed_proces(app_name, succesfull_task_id))
 		id_, msg = self.omq.get_message(app_name, message_id=succesfull_task_id)
@@ -177,5 +184,7 @@ class TestOMW(unittest.TestCase):
 
 
 if __name__ == '__main__':
+	# logging.basicConfig(level=logging.DEBUG, format='%(name)s %(levelname)s %(message)s')
+	# logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
 	load_dotenv()
 	unittest.main()

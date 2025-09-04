@@ -12,6 +12,7 @@ from sqlalchemy.engine.row import Row
 
 logger = logging.getLogger(__name__)
 
+
 class ProcesStatus(Enum):
 	QUEUED = 'queued'
 	FAILED = 'failed'
@@ -71,6 +72,7 @@ class OMQ(metaclass=Singleton):
 					`creation` DATETIME NOT NULL,
 					`customer` INT(11) NULL DEFAULT NULL,
 					`message` LONGTEXT NOT NULL COLLATE 'utf8mb4_bin',
+					`error_log` LONGTEXT NULL DEFAULT NULL COLLATE 'utf8mb4_unicode_ci',
 					PRIMARY KEY (`id`) USING BTREE,
 					INDEX `FK__workers` (`destination`) USING BTREE,
 					CONSTRAINT `FK__workers` FOREIGN KEY (`destination`) REFERENCES `workers` (`name`) ON UPDATE NO ACTION ON DELETE NO ACTION,
@@ -96,7 +98,7 @@ class OMQ(metaclass=Singleton):
 			sock.sendto(message.encode(), server_address)
 
 	def _row_to_dict(self, row: Row) -> dict:
-		id_, priority, status, creation, customer, message = row
+		id_, priority, status, creation, customer, message, error_log = row
 		return {
 			'id': id_,
 			'priority': priority,
@@ -104,6 +106,7 @@ class OMQ(metaclass=Singleton):
 			'creation': creation,
 			'customer': customer,
 			'message': json.loads(message),
+			'error_log': error_log,
 		}
 
 	def get_messages(
@@ -145,7 +148,8 @@ class OMQ(metaclass=Singleton):
 				`status`,
 				`creation`,
 				`customer`,
-				`message`
+				`message`,
+				`error_log`
 			 from
 			 	`messages`
 			where
@@ -203,16 +207,36 @@ class OMQ(metaclass=Singleton):
 			logger.error(naf)
 			return False
 
+		sql_task_alread_exists = """
+			SELECT
+				id
+			FROM
+				`messages`
+			WHERE
+				`destination` = :app_name
+				and COALESCE(`customer`, '') = :customer
+				and `message` = :message
+		"""
+
 		sql = """
 			insert into `messages`(`destination`, `priority`, `status`, `creation`, `customer`, `message`)
-			values(:app_name, :priority, 'queued', now(), :customer, :message)
+			values(:app_name, :priority, :queued, now(), :customer, :message)
 		"""
 		with self.engine.connect() as connection:
 			try:
 				connection.begin()
+				resultset = connection.execute(text(sql_task_alread_exists), {
+					'app_name': app_name,
+					'customer': customer or '',
+					'message': message,
+				})
+				if resultset.rowcount != 0:
+					return False
+
 				connection.execute(text(sql), {
 					'app_name': app_name,
 					'message':message,
+					'queued':ProcesStatus.QUEUED.value,
 					'priority': priority,
 					'customer': customer,
 				})
@@ -224,12 +248,19 @@ class OMQ(metaclass=Singleton):
 
 			return True
 
-	def _set_status(self, app_name: str, message_id: int, status: ProcesStatus):
+	def _set_status(self, app_name: str, message_id: int, status: ProcesStatus, error_msg=None):
 		if not isinstance(status, ProcesStatus):
 			raise InvalidArgument('Invalid argument provided, should be one of the ProcesStatus enumerations.')
 
-		sql = """
-			update `messages` set `status` = :status
+		err = ''
+		if error_msg:
+			err = ', `error_log` = :error'
+
+		sql = f"""
+			update `messages`
+			set
+				`status` = :status
+				{err}
 			where
 				`destination` = :app_name
 				and `id` = :message_id
@@ -240,6 +271,7 @@ class OMQ(metaclass=Singleton):
 				'status': status.value,
 				'app_name': app_name,
 				'message_id': int(message_id),
+				'error': error_msg,
 			})
 			connection.commit()
 			if result.rowcount == 1:
@@ -254,8 +286,8 @@ class OMQ(metaclass=Singleton):
 	def starting_proces(self, app_name: str, message_id: int) -> bool:
 		return self._set_status(app_name, message_id, ProcesStatus.PROGRESS)
 
-	def failed_proces(self, app_name: str, message_id: int) -> bool:
-		return self._set_status(app_name, message_id, ProcesStatus.FAILED)
+	def failed_proces(self, app_name: str, message_id: int, error_log=None) -> bool:
+		return self._set_status(app_name, message_id, ProcesStatus.FAILED, error_msg=error_log)
 
 	def completed_proces(self, app_name: str, message_id: int) -> bool:
 		sql = """
