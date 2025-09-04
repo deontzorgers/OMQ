@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='OMQ',
-    version='1.0.4',
+    version='1.0.5',
     description='Message broker design for De ontzorgers (https://www.deontzorgers.nl)',
     url='https://github.com/shuds13/pyexample',
     author='De Ontzorgers',
